@@ -13,39 +13,45 @@ import random
 if os.name == 'posix':
     print('os is linux')
     import resource
+
     resource.setrlimit(resource.RLIMIT_NOFILE, (127000, 128000))
 
-    
-    
-# Function to send data in fragments with random chunks
-def send_data_in_fragment(data , sock):
-    L_data = len(data)
-    indices = random.sample(range(1,L_data-1), num_fragment-1)
-    indices.sort()
-    logging.debug('[SEND] indices='+str(indices))    
 
-    i_pre=0
+def get_ips_for_host(host):
+    try:
+        ips = socket.gethostbyname_ex(host)
+    except socket.gaierror:
+        ips = []
+    return ips
+
+
+# Function to send data in fragments with random chunks
+def send_data_in_fragment(data, sock):
+    L_data = len(data)
+    indices = random.sample(range(1, L_data - 1), num_fragment - 1)
+    indices.sort()
+    logging.debug('[SEND] indices=' + str(indices))
+
+    i_pre = 0
     for i in indices:
         fragment_data = data[i_pre:i]
-        i_pre=i
-        # print('send ',len(fragment_data),' bytes')                                        
-        sock.sendall(fragment_data)        
+        i_pre = i
+        # print('send ',len(fragment_data),' bytes')
+        sock.sendall(fragment_data)
         time.sleep(fragment_sleep)
-    
+
     fragment_data = data[i_pre:L_data]
     sock.sendall(fragment_data)
     logging.debug('[SEND] ----------finish------------')
 
-
-
-    
 
 # Function to handle upstream traffic from the client to the backend server
 def my_upstream(client_sock):
     first_flag = True
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as backend_sock:
         backend_sock.settimeout(my_socket_timeout)
-        backend_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)   #force localhost kernel to send TCP packet immediately (idea: @free_the_internet)
+        backend_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY,
+                                1)  # force localhost kernel to send TCP packet immediately (idea: @free_the_internet)
         while True:
             try:
                 if first_flag:
@@ -54,7 +60,7 @@ def my_upstream(client_sock):
                     data = client_sock.recv(16384)
                     if data:
                         backend_ip = get_next_backend_ip()
-                        print(f'Using backend IP: {backend_ip}')  # Print the selected backend IP
+                        print(f'Using IP: {backend_ip}')  # Print the selected backend IP
                         backend_sock.connect((backend_ip, Cloudflare_port))
                         thread_down = threading.Thread(target=my_downstream, args=(backend_sock, client_sock))
                         thread_down.daemon = True
@@ -99,26 +105,40 @@ def my_downstream(backend_sock, client_sock):
             client_sock.close()
             return False
 
+
 # Function to parse command line arguments
 def parse_args():
     parser = argparse.ArgumentParser(description='Python Proxy')
     parser.add_argument('--config', type=str, default='config.ini', help='Path to the configuration file')
     return parser.parse_args()
 
+
 # Function to load configuration from a file
-def load_config(config_path):
+def load_config(config_path, isp_num):
     config = configparser.ConfigParser()
     config.read(config_path)
 
     global listen_PORT, Cloudflare_IPs, Cloudflare_port, num_fragment, fragment_sleep, my_socket_timeout, first_time_sleep, accept_time_sleep
     listen_PORT = int(config.get('settings', 'listen_PORT'))
-    Cloudflare_IPs = [ip.strip() for ip in config.get('settings', 'Cloudflare_IP').split(',')]
+    Cloudflare_Domains = [ip.strip() for ip in config.get('settings', 'Cloudflare_Domain').split(',')]
+    if isp_num == "1":
+        Cloudflare_Domains = [ip.strip() for ip in config.get('settings', 'Cloudflare_Domain_MKB').split(',')]
+    elif isp_num == "2":
+        Cloudflare_Domains = [ip.strip() for ip in config.get('settings', 'Cloudflare_Domain_MCI').split(',')]
+    print(Cloudflare_Domains)
+    Cloudflare_IPs = []
+    for item in Cloudflare_Domains:
+        print(get_ips_for_host(item))
+        ip = get_ips_for_host(item)
+        print(ip)
+        Cloudflare_IPs.append(ip[2][0])
     Cloudflare_port = int(config.get('settings', 'Cloudflare_port'))
     num_fragment = int(config.get('settings', 'num_fragment'))
     fragment_sleep = float(config.get('settings', 'fragment_sleep'))
     my_socket_timeout = int(config.get('settings', 'my_socket_timeout'))
     first_time_sleep = float(config.get('settings', 'first_time_sleep'))
     accept_time_sleep = float(config.get('settings', 'accept_time_sleep'))
+
 
 # Function to get the next backend IP using round-robin load balancing
 def get_next_backend_ip():
@@ -127,14 +147,14 @@ def get_next_backend_ip():
     Cloudflare_IPs = Cloudflare_IPs[1:] + [selected_ip]
     return selected_ip
 
+
 # Main function to start the proxy server
 def main():
     args = parse_args()
-    load_config(args.config)
-
+    isp_num = input("Select Your ISP Please : \n1- Mokhaberat Iran\n2-Hamrah Aval\n Select 1 Or 2 : ")
+    #mode = input("Select 1-Manual Mode Or 2-LoadBalance Mode :")
+    load_config(args.config, isp_num)
     print(f'Proxy server listening on 127.0.0.1:{listen_PORT}')
-
-
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_sock.bind(('', listen_PORT))
@@ -146,6 +166,7 @@ def main():
                 client_sock.settimeout(my_socket_timeout)
                 time.sleep(accept_time_sleep)
                 executor.submit(my_upstream, client_sock)
+
 
 if __name__ == "__main__":
     main()
